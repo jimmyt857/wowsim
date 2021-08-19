@@ -614,11 +614,9 @@ function calcStatWeights(gearSpec) {
 		workerPool.statWeights(statWeightsRequest).then(statWeightsResult => {
 				statsTested.forEach((stat, i) => {
 						const ep = statWeightsResult.EpValues[stat];
-						const epStDev = statWeightsResult.EpValuesStDev[stat];
-						const epConf90 = stDevToConf90(epStDev, statWeightsRequest.Iterations);
-
+						const epError = statWeightsResult.EpValuesError[stat];
 						weightElems[i].innerText = ep.toFixed(2);
-						weightConfidenceElems[i].innerText = (ep - epConf90).toFixed(2) + " - " + (ep + epConf90).toFixed(2);
+						weightConfidenceElems[i].innerText = (ep - epError).toFixed(2) + " - " + (ep + epError).toFixed(2);
 				});
 
 				showGearRecommendations(statWeightsResult.EpValues);

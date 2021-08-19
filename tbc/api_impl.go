@@ -11,9 +11,9 @@ import (
 
 func getGearListImpl(request GearListRequest) GearListResult {
 	return GearListResult{
-		Items: items,
+		Items:    items,
 		Enchants: Enchants,
-		Gems: Gems,
+		Gems:     Gems,
 	}
 }
 
@@ -33,24 +33,35 @@ func computeStatsImpl(request ComputeStatsRequest) ComputeStatsResult {
 	}
 
 	return ComputeStatsResult{
-		GearOnly: gearOnlyStats,
+		GearOnly:   gearOnlyStats,
 		FinalStats: finalStats,
-		Sets: sets,
+		Sets:       sets,
 	}
+}
+
+func conf90(stdev, n float64) float64 {
+	return 1.645 * stdev / math.Sqrt(n)
 }
 
 func statWeightsImpl(request StatWeightsRequest) StatWeightsResult {
 	request.Options.AgentType = AGENT_TYPE_ADAPTIVE
 
 	baselineSimRequest := SimRequest{
-		Options: request.Options,
-		Gear: request.Gear,
+		Options:    request.Options,
+		Gear:       request.Gear,
 		Iterations: request.Iterations,
 	}
 	baselineResult := RunSimulation(baselineSimRequest)
 
 	var waitGroup sync.WaitGroup
 	result := StatWeightsResult{}
+
+	iters := float64(request.Iterations)
+	// Base Values:
+	baseConfDPS := conf90(baselineResult.DpsStDev, iters)
+	// 90% conf interval for base DPS
+	baseMin := baselineResult.DpsAvg - baseConfDPS
+	baseMax := baselineResult.DpsAvg + baseConfDPS
 
 	doStat := func(stat Stat, value float64) {
 		defer waitGroup.Done()
@@ -59,15 +70,21 @@ func statWeightsImpl(request StatWeightsRequest) StatWeightsResult {
 		simRequest.Options.Buffs.Custom[stat] += value
 
 		simResult := RunSimulation(simRequest)
-		result.Weights[stat] = (simResult.DpsAvg - baselineResult.DpsAvg) / value
-		// TODO: I think this equation is wrong
-		result.WeightsStDev[stat] = (simResult.DpsStDev - baselineResult.DpsStDev) / value
+
+		statConf := conf90(simResult.DpsStDev, iters)
+		// 90% conf interval for difference between base and stat DPS
+		result.WeightsMax[stat] = (simResult.DpsAvg + statConf - baseMin) / value
+		result.WeightsMin[stat] = (simResult.DpsAvg - statConf - baseMax) / value
 	}
 
 	statsToTest := []Stat{StatInt, StatSpellDmg, StatSpellCrit, StatSpellHit, StatHaste, StatMP5}
 	for _, stat := range statsToTest {
 		waitGroup.Add(1)
-		go doStat(stat, 50)
+		if stat == StatSpellHit {
+			go doStat(stat, 10)
+		} else {
+			go doStat(stat, 50)
+		}
 	}
 
 	waitGroup.Wait()
@@ -75,17 +92,21 @@ func statWeightsImpl(request StatWeightsRequest) StatWeightsResult {
 	// If hit capped, just set weight for spell hit to 0
 	computeStatsResult := ComputeStats(ComputeStatsRequest{
 		Options: request.Options,
-		Gear: request.Gear,
+		Gear:    request.Gear,
 	})
 	if computeStatsResult.FinalStats[StatSpellHit] > 202 {
-		result.Weights[StatSpellHit] = 0
-		result.WeightsStDev[StatSpellHit] = 0
+		result.WeightsMax[StatSpellHit] = 0
+		result.WeightsMin[StatSpellHit] = 0
 	}
 
 	for _, stat := range statsToTest {
-		result.EpValues[stat] = result.Weights[stat] / result.Weights[StatSpellDmg]
-		// TODO: I think this equation is wrong
-		result.EpValuesStDev[stat] = result.WeightsStDev[stat] / result.WeightsStDev[StatSpellDmg]
+		// Now compare the max and min weights against the max/min of spelldmg (as a normalizer)
+		maxEP := result.WeightsMax[stat] / result.WeightsMax[StatSpellDmg]
+		minEP := result.WeightsMin[stat] / result.WeightsMin[StatSpellDmg]
+
+		// Use the average between the max and min possible EP
+		result.EpValues[stat] = (maxEP + minEP) / 2
+		result.EpValuesError[stat] = maxEP - result.EpValues[stat] // should be roughly the same as (result.EpValues[stat] - minEP)
 	}
 	return result
 }
@@ -134,26 +155,26 @@ func runBatchSimulationImpl(request BatchSimRequest) BatchSimResult {
 }
 
 type MetricsAggregator struct {
-	startTime       time.Time
-	numSims         int
+	startTime time.Time
+	numSims   int
 
-	dpsSum          float64
-	dpsSumSquared   float64
-	dpsMax          float64
-	dpsHist         map[int]int          // rounded DPS to count
+	dpsSum        float64
+	dpsSumSquared float64
+	dpsMax        float64
+	dpsHist       map[int]int // rounded DPS to count
 
-	numOom          int
-	oomAtSum        float64
-	dpsAtOomSum     float64
+	numOom      int
+	oomAtSum    float64
+	dpsAtOomSum float64
 
-	casts           map[int32]CastMetric
+	casts map[int32]CastMetric
 }
 
 func NewMetricsAggregator() *MetricsAggregator {
 	return &MetricsAggregator{
 		startTime: time.Now(),
-		dpsHist: make(map[int]int),
-		casts: make(map[int32]CastMetric),
+		dpsHist:   make(map[int]int),
+		casts:     make(map[int32]CastMetric),
 	}
 }
 
@@ -169,7 +190,7 @@ func (aggregator *MetricsAggregator) addMetrics(options Options, metrics SimMetr
 	aggregator.dpsSumSquared += dps * dps
 	aggregator.dpsMax = math.Max(aggregator.dpsMax, dps)
 
-	dpsRounded := int(math.Round(dps / 10) * 10)
+	dpsRounded := int(math.Round(dps/10) * 10)
 	aggregator.dpsHist[dpsRounded]++
 
 	if metrics.OOMAt > 0 {
@@ -200,16 +221,16 @@ func (aggregator *MetricsAggregator) getResult() SimResult {
 	result.ExecutionDurationMs = time.Since(aggregator.startTime).Milliseconds()
 
 	numSims := float64(aggregator.numSims)
-	result.DpsAvg      = aggregator.dpsSum / numSims
-	result.DpsStDev    = math.Sqrt((aggregator.dpsSumSquared / numSims) - (result.DpsAvg * result.DpsAvg))
-	result.DpsMax      = aggregator.dpsMax
-	result.DpsHist     = aggregator.dpsHist
+	result.DpsAvg = aggregator.dpsSum / numSims
+	result.DpsStDev = math.Sqrt((aggregator.dpsSumSquared / numSims) - (result.DpsAvg * result.DpsAvg))
+	result.DpsMax = aggregator.dpsMax
+	result.DpsHist = aggregator.dpsHist
 
-	result.NumOom      = aggregator.numOom
-	result.OomAtAvg    = aggregator.oomAtSum / numSims
+	result.NumOom = aggregator.numOom
+	result.OomAtAvg = aggregator.oomAtSum / numSims
 	result.DpsAtOomAvg = aggregator.dpsAtOomSum / numSims
 
-	result.Casts       = aggregator.casts
+	result.Casts = aggregator.casts
 
 	return result
 }

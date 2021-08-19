@@ -11,6 +11,7 @@ import (
 func GetGearList(request GearListRequest) GearListResult {
 	return getGearListImpl(request)
 }
+
 type GearListRequest struct {
 }
 type GearListResult struct {
@@ -25,9 +26,10 @@ type GearListResult struct {
 func ComputeStats(request ComputeStatsRequest) ComputeStatsResult {
 	return computeStatsImpl(request)
 }
+
 type ComputeStatsRequest struct {
-	Options     Options
-	Gear        EquipmentSpec
+	Options Options
+	Gear    EquipmentSpec
 }
 type ComputeStatsResult struct {
 	// Only from gear (no base stats!)
@@ -46,24 +48,23 @@ type ComputeStatsResult struct {
 func StatWeights(request StatWeightsRequest) StatWeightsResult {
 	return statWeightsImpl(request)
 }
+
 type StatWeightsRequest struct {
-	Options     Options
-	Gear        EquipmentSpec
-	Iterations  int
+	Options    Options
+	Gear       EquipmentSpec
+	Iterations int
 }
 type StatWeightsResult struct {
 	// Increase in dps from 1 point of each stat
-	Weights       Stats
-
-	// Standard deviations for Weights
-	WeightsStDev  Stats
+	WeightsMax Stats
+	WeightsMin Stats
 
 	// EP value for each stat, basically just the weight but normalized so that
 	// spell power always has an EP of 1
-	EpValues      Stats
+	EpValues Stats
 
-	// Standard deviations for EpValues
-	EpValuesStDev Stats
+	// Margin of error for each stat (using 90% conf intervals from DPS)
+	EpValuesError Stats
 }
 
 /**
@@ -72,6 +73,7 @@ type StatWeightsResult struct {
 func RunSimulation(request SimRequest) SimResult {
 	return runSimulationImpl(request)
 }
+
 type SimRequest struct {
 	Options     Options
 	Gear        EquipmentSpec
@@ -82,16 +84,16 @@ type SimResult struct {
 	ExecutionDurationMs int64
 	Logs                string
 
-	DpsAvg              float64
-	DpsStDev            float64
-	DpsMax              float64
-	DpsHist             map[int]int          // rounded DPS to count
+	DpsAvg   float64
+	DpsStDev float64
+	DpsMax   float64
+	DpsHist  map[int]int // rounded DPS to count
 
-	NumOom              int
-	OomAtAvg            float64
-	DpsAtOomAvg         float64
+	NumOom      int
+	OomAtAvg    float64
+	DpsAtOomAvg float64
 
-	Casts               map[int32]CastMetric
+	Casts map[int32]CastMetric
 }
 
 /**
@@ -109,11 +111,12 @@ type CastMetric struct {
 func RunBatchSimulation(request BatchSimRequest) BatchSimResult {
 	return runBatchSimulationImpl(request)
 }
+
 type BatchSimRequest struct {
 	Requests []SimRequest
 }
 type BatchSimResult struct {
-	Results  []SimResult
+	Results []SimResult
 }
 
 func PackOptions(request PackOptionsRequest) PackOptionsResult {
@@ -121,6 +124,7 @@ func PackOptions(request PackOptionsRequest) PackOptionsResult {
 		Data: base64.StdEncoding.EncodeToString(request.Options.Pack()),
 	}
 }
+
 type PackOptionsRequest struct {
 	Options Options
 }
@@ -150,22 +154,22 @@ type ApiResult struct {
 func ApiCall(request ApiRequest) ApiResult {
 	if request.GearList != nil {
 		result := GetGearList(*request.GearList)
-		return ApiResult{ GearList: &result }
+		return ApiResult{GearList: &result}
 	} else if request.ComputeStats != nil {
 		result := ComputeStats(*request.ComputeStats)
-		return ApiResult{ ComputeStats: &result }
+		return ApiResult{ComputeStats: &result}
 	} else if request.StatWeights != nil {
 		result := StatWeights(*request.StatWeights)
-		return ApiResult{ StatWeights: &result }
+		return ApiResult{StatWeights: &result}
 	} else if request.Sim != nil {
 		result := RunSimulation(*request.Sim)
-		return ApiResult{ Sim: &result }
+		return ApiResult{Sim: &result}
 	} else if request.BatchSim != nil {
 		result := RunBatchSimulation(*request.BatchSim)
-		return ApiResult{ BatchSim: &result }
+		return ApiResult{BatchSim: &result}
 	} else if request.PackOptions != nil {
 		result := PackOptions(*request.PackOptions)
-		return ApiResult{ PackOptions: &result }
+		return ApiResult{PackOptions: &result}
 	} else {
 		panic("Empty API request!")
 	}
